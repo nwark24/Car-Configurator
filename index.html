@@ -1,0 +1,1359 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mustang Configurator ??" GLB Camera + Fit + 25% Right/Up Shift</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    :root{
+      --bg:#ffffff; --text:#0b1220; --muted:#667085; --accent:#4f46e5;
+      --panel:#ffffffF2; --bdr:rgba(16,24,40,.10); --shadow:0 16px 42px rgba(16,24,40,.12);
+      --radius:14px; --viewer-w:clamp(420px,58vw,1200px);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+
+    #viewer{
+      position:fixed; top:16px; right:16px; bottom:16px; width:var(--viewer-w);
+      background:#fff; border:1px solid var(--bdr); border-radius:var(--radius);
+      box-shadow:var(--shadow); overflow:hidden;
+    }
+    canvas{display:block}
+
+    .overlay{
+      position:absolute; inset:0; display:none; place-items:center; z-index:4;
+      background:radial-gradient(800px 400px at 50% 30%, rgba(80,90,130,.10), rgba(0,0,0,.04));
+      color:#111; text-align:center; padding:20px; pointer-events:none;
+    }
+    .overlay.visible{display:grid}
+    .dropzone{font-size:18px;border:2px dashed rgba(16,24,40,.25);padding:16px 22px;border-radius:12px;background:#fff}
+    .progress{height:4px;border-radius:99px;overflow:hidden;background:rgba(16,24,40,.10);margin-top:12px}
+    .progress span{display:block;height:100%;width:0;background:linear-gradient(90deg,#8b5cf6,#06b6d4)}
+
+    .ui{
+      position:fixed; top:16px; left:16px; z-index:5;
+      width:clamp(320px,36vw,560px); max-width:560px;
+      background:var(--panel); backdrop-filter:blur(8px);
+      border:1px solid var(--bdr); border-radius:var(--radius); box-shadow:var(--shadow);
+      padding:14px;
+    }
+    @media (max-width:1024px){
+      #viewer{position:static; width:calc(100vw - 24px); height:min(68vh,620px); margin:12px auto 0}
+      .ui{position:static; width:calc(100vw - 24px); max-width:820px; margin:12px auto 24px}
+    }
+
+    .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+    .row label{color:var(--muted);font-size:12px}
+    .swatches{display:grid;grid-template-columns:repeat(8,26px);gap:8px}
+    .swatch{width:26px;height:26px;border-radius:50%;border:1px solid rgba(16,24,40,.18);cursor:pointer}
+    .swatch[aria-checked="true"]{box-shadow:0 0 0 2px var(--accent), inset 0 0 0 2px rgba(255,255,255,.95)}
+    .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .control{background:#f9fafb;border:1px solid var(--bdr);border-radius:10px;padding:10px;display:grid;gap:6px}
+    .control input[type="range"]{width:100%}
+    .control input[type="color"]{width:100%;height:34px;border-radius:8px;border:1px solid var(--bdr);background:#fff;padding:0;cursor:pointer}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+    .btn{appearance:none;border:1px solid var(--bdr);background:#fff;color:#0b1220;padding:8px 10px;border-radius:10px;cursor:pointer;font-weight:600}
+    .btn:hover{background:#f3f4f6}
+    .muted{color:var(--muted);font-size:12px}
+
+    details summary{cursor:pointer;list-style:none}
+    details summary::marker,details summary::-webkit-details-marker{display:none}
+
+    .chips{
+      display:flex;
+      flex-wrap:wrap;
+      gap:6px;
+      margin-top:6px;
+      max-height:150px;
+      overflow-y:auto;
+      padding-right:4px;
+    }
+    .chip{border:1px solid var(--bdr);background:#fff;border-radius:999px;padding:4px 8px;cursor:pointer;font-size:12px;white-space:nowrap}
+    .chip[aria-pressed="true"]{background:rgba(99,102,241,.15);border-color:rgba(99,102,241,.45)}
+
+    .hint{position:fixed;right:28px;bottom:24px;z-index:5;color:#475467;background:#fff;padding:6px 10px;border-radius:10px;border:1px solid var(--bdr)}
+    .fs{position:fixed;right:calc(16px + 12px);top:16px;z-index:6}
+
+    #filePicker{position:fixed;left:-9999px;top:-9999px;width:0;height:0;opacity:0;pointer-events:none}
+  </style>
+</head>
+<body>
+  <div id="viewer" aria-label="3D car viewer">
+    <div class="overlay" id="overlay">
+      <div class="dropzone">
+        <div id="overlayText">Drop your <strong>.glb</strong> model here</div>
+        <div class="progress"><span id="bar"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ui" role="region" aria-label="Configurator controls">
+    <div class="row" style="justify-content:space-between;">
+      <strong>Mustang Configurator</strong>
+      <span class="muted" id="modelName">No model loaded</span>
+    </div>
+
+    <div class="row">
+      <label>Paint colours</label>
+      <div class="swatches" id="swatches" aria-label="Paint swatches"></div>
+    </div>
+
+    <div class="controls">
+      <div class="control">
+        <label for="customColor" class="muted">Custom colour</label>
+        <input id="customColor" type="color" value="#C00012" />
+      </div>
+      <div class="control">
+        <label class="muted">Auto-rotate</label>
+        <div class="row" style="gap:6px;align-items:center">
+          <input id="autoRotate" type="checkbox" />
+          <input id="rotateSpeed" type="range" min="0.2" max="5" value="1.5" step="0.1" />
+        </div>
+      </div>
+    </div>
+
+    <div class="controls" style="margin-top:8px;">
+      <div class="control">
+        <label for="exposure" class="muted">Exposure</label>
+        <input id="exposure" type="range" min="0.5" max="1.6" value="1.05" step="0.01" />
+      </div>
+      <div class="control">
+        <label for="envStrength" class="muted">Reflections</label>
+        <input id="envStrength" type="range" min="0" max="1.0" value="0.35" step="0.01" />
+      </div>
+    </div>
+
+    <div class="controls" style="margin-top:4px;grid-template-columns:1fr;">
+      <div class="control">
+        <label for="finish" class="muted">Finish (Matte ?+" Glossy)</label>
+        <input id="finish" type="range" min="0" max="1" step="0.01" value="0.85" />
+      </div>
+    </div>
+
+    <div class="controls" style="margin-top:4px;grid-template-columns:1fr;">
+      <div class="control">
+        <label class="muted" for="wheelVariant">Wheels</label>
+        <select id="wheelVariant">
+          <option value="">Auto (from GLB)</option>
+        </select>
+      </div>
+    </div>
+
+    <details>
+      <summary>Advanced: choose which materials are ??ocar paint???</summary>
+      <div class="chips" id="materialChips"></div>
+    </details>
+
+    <div class="toolbar">
+      <label class="btn" id="btnOpen" for="filePicker" title="Load a .glb file">Load GLB</label>
+      <button class="btn" id="btnFit" title="Re-fit (keeps offset)">Fit view</button>
+      <button class="btn" id="btnReset">Reset view</button>
+      <button class="btn" id="btnScreenshot">Screenshot</button>
+      <button class="btn" id="btnShare">Share</button>
+    </div>
+
+    <input id="filePicker" type="file" accept=".glb,model/gltf-binary,model/gltf+binary" />
+
+    <div class="muted" style="margin-top:6px;">
+      Uses your GLB??Ts camera orientation, fits the whole car, then <strong>shifts camera right &amp; up by 25%</strong>.
+    </div>
+  </div>
+
+  <button class="btn fs" id="btnFS" title="Toggle fullscreen viewer">??&gt;?</button>
+  <div class="hint">Orbit (left drag) ??? Pan (right drag) ??? Zoom (wheel)</div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+    const SHIFT_RIGHT_F = 0.25;
+    const SHIFT_UP_F    = 0.25;
+
+    const url = new URL(location.href);
+    const START_MODEL   = url.searchParams.get('model') || './FORD%20MUSTANG%20S550%20CONFIGURATOR%20(2).glb';
+    const CAM_NAME      = url.searchParams.get('cam');
+    const DEFAULT_SWATCH = '#C00012';
+
+    const container = document.getElementById('viewer');
+    const overlay   = document.getElementById('overlay');
+    const overlayText = document.getElementById('overlayText');
+    const bar = document.getElementById('bar');
+    const modelNameEl = document.getElementById('modelName');
+
+    const swatchesEl = document.getElementById('swatches');
+    const chipsEl    = document.getElementById('materialChips');
+    const colorInput = document.getElementById('customColor');
+    const autoRotateEl  = document.getElementById('autoRotate');
+    const rotateSpeedEl = document.getElementById('rotateSpeed');
+    const exposureEl    = document.getElementById('exposure');
+    const envStrengthEl = document.getElementById('envStrength');
+    const finishEl      = document.getElementById('finish');
+    const wheelSelect   = document.getElementById('wheelVariant');
+
+    const btnFit   = document.getElementById('btnFit');
+    const btnReset = document.getElementById('btnReset');
+    const btnShot  = document.getElementById('btnScreenshot');
+    const btnShare = document.getElementById('btnShare');
+    const btnFS    = document.getElementById('btnFS');
+    const filePicker = document.getElementById('filePicker');
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.physicallyCorrectLights = true;
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene(); scene.background = null;
+
+    let camera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
+    const defaultCamera = camera;
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; controls.dampingFactor = 0.05;
+    controls.minDistance = 0.5; controls.maxDistance = 100;
+    controls.autoRotate = false; controls.autoRotateSpeed = 1.5;
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = envTex;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xf3f4f6, 0.45));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.20));
+
+    let orthoBaseHeight = null;
+    function resize(){
+      const w = Math.max(1, container.clientWidth);
+      const h = Math.max(1, container.clientHeight);
+      const aspect = w / h;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(w, h, false);
+      if (camera.isPerspectiveCamera) camera.aspect = aspect;
+      else if (camera.isOrthographicCamera){
+        const height = orthoBaseHeight ?? (camera.top - camera.bottom);
+        const width  = height * aspect;
+        const cx=(camera.left+camera.right)/2, cy=(camera.top+camera.bottom)/2;
+        camera.left=cx-width/2; camera.right=cx+width/2; camera.top=cy+height/2; camera.bottom=cy-height/2;
+      }
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize); resize();
+
+    const manager = new THREE.LoadingManager();
+    manager.onStart = () => { overlay.classList.add('visible'); setBar(0); overlayText.textContent = "Loading model???"; };
+    manager.onProgress = (_url, loaded, total) => setBar(total ? (loaded/total) : 0.35);
+    manager.onLoad = () => { setTimeout(()=>overlay.classList.remove('visible'), 200); setBar(0); };
+    function setBar(v){ bar.style.width = `${Math.round(v*100)}%`; }
+
+    const gltfLoader = new GLTFLoader(manager);
+    const draco = new DRACOLoader(); draco.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/'); gltfLoader.setDRACOLoader(draco);
+    const ktx   = new KTX2Loader().setTranscoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/basis/'); ktx.detectSupport(renderer); gltfLoader.setKTX2Loader(ktx);
+
+    let currentRoot = null;
+    let paintMaterials = new Set();
+    let wheelVariants = [];
+    let allWheelNodes = [];
+    let tailLightMaterials = [];
+    let startSnapshot = null;
+
+    const PALETTE = [
+      { name:'Race Red', hex:'#C00012' }, { name:'Rapid Red', hex:'#A50E1D' },
+      { name:'Oxford White', hex:'#F2F4F5' }, { name:'Shadow Black', hex:'#0A0A0A' },
+      { name:'Grabber Blue', hex:'#1D5CF5' }, { name:'Atlas Blue', hex:'#1D3A6E' },
+      { name:'Iconic Silver', hex:'#A9A9B1' }, { name:'Carbonized Gray', hex:'#6E7177' }
+    ];
+    PALETTE.forEach((c,i)=>{
+      const b=document.createElement('button'); b.className='swatch'; b.style.background=c.hex; b.title=c.name;
+      b.setAttribute('role','radio'); b.setAttribute('aria-checked', i===0?'true':'false');
+      b.addEventListener('click', ()=>{
+        swatchesEl.querySelectorAll('.swatch').forEach(s=>s.setAttribute('aria-checked','false'));
+        b.setAttribute('aria-checked','true');
+        colorInput.value=c.hex;
+        applyPaintColor(colorInput.value);
+      });
+      swatchesEl.appendChild(b);
+    });
+    colorInput.addEventListener('input', ()=> applyPaintColor(colorInput.value));
+    autoRotateEl.addEventListener('change', ()=> controls.autoRotate = autoRotateEl.checked);
+    rotateSpeedEl.addEventListener('input', ()=> controls.autoRotateSpeed = +rotateSpeedEl.value);
+    exposureEl.addEventListener('input', ()=> renderer.toneMappingExposure = +exposureEl.value);
+    envStrengthEl.addEventListener('input', ()=> setEnvIntensitySmart(+envStrengthEl.value));
+    finishEl.addEventListener('input', ()=> applyPaintColor(colorInput.value));
+    wheelSelect?.addEventListener('change', ()=>{
+      if(!currentRoot) return;
+      applyWheelVariant(wheelSelect.value);
+    });
+
+    document.getElementById('btnOpen')?.addEventListener('click', ()=>{
+      if (filePicker.showPicker) { try { filePicker.showPicker(); } catch {} }
+    });
+    filePicker.addEventListener('change', async (e) => {
+      const f = e.target.files?.[0]; if (!f) return;
+      if (!/\.glb$/i.test(f.name)) { alert('Please select a .glb'); filePicker.value=''; return; }
+      const objUrl = URL.createObjectURL(f);
+      try { await loadModel(objUrl, { displayName: f.name, preferGlbCamera: true }); }
+      finally { URL.revokeObjectURL(objUrl); filePicker.value=''; }
+    });
+
+    btnFS.addEventListener('click', ()=>{
+      if (!document.fullscreenElement) container.requestFullscreen?.();
+      else document.exitFullscreen?.();
+    });
+    btnShot.addEventListener('click', ()=>{
+      const url = renderer.domElement.toDataURL('image/png');
+      const a=document.createElement('a'); a.href=url; a.download='mustang.png'; a.click();
+    });
+    btnShare.addEventListener('click', ()=>{
+      const col = colorInput.value.replace('#','');
+      const qs = new URLSearchParams(location.search);
+      if (!qs.get('model') && START_MODEL) qs.set('model', START_MODEL);
+      qs.set('c', col);
+      navigator.clipboard?.writeText(`${location.origin}${location.pathname}?${qs.toString()}`);
+      alert('Sharable URL copied to clipboard!');
+    });
+    btnFit.addEventListener('click', ()=>{
+      if(!currentRoot) return;
+      const b=getRenderableBounds(currentRoot);
+      slideCameraToFit(camera, b, 1.35);
+      applyCameraShift(camera, b, SHIFT_RIGHT_F, SHIFT_UP_F);
+      startSnapshot = snapshotCamera();
+    });
+    btnReset.addEventListener('click', ()=>{
+      if (startSnapshot) restoreCameraSnapshot(startSnapshot);
+    });
+
+    (function enableDnD(){
+      const show = () => overlay.classList.add('visible');
+      const hide = () => overlay.classList.remove('visible');
+      ['dragenter','dragover'].forEach(evt => container.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation(); show();
+      }, { passive:false }));
+      container.addEventListener('dragleave', e => {
+        e.preventDefault(); e.stopPropagation();
+        if (e.target === container) hide();
+      }, { passive:false });
+      container.addEventListener('drop', async (e) => {
+        e.preventDefault(); e.stopPropagation(); hide();
+        const file = e.dataTransfer?.files?.[0]; if (!file) return;
+        if (!/\.glb$/i.test(file.name)) { alert('Please drop a .glb'); return; }
+        const objUrl = URL.createObjectURL(file);
+        try { await loadModel(objUrl, { displayName: file.name, preferGlbCamera: true }); }
+        finally { URL.revokeObjectURL(objUrl); }
+      }, { passive:false });
+      ['dragenter','dragover','drop'].forEach(evt =>
+        window.addEventListener(evt, e => e.preventDefault(), { passive:false })
+      );
+    })();
+
+    function getRenderableBounds(root){
+      const box=new THREE.Box3(); const tmp=new THREE.Box3(); let has=false;
+      root.updateWorldMatrix(true,true);
+      root.traverse(o=>{
+        if(o.visible && (o.isMesh||o.isSkinnedMesh) && o.geometry){
+          if(!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+          tmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+          if(!has){ box.copy(tmp); has=true; } else box.union(tmp);
+        }
+      });
+      return has ? box : new THREE.Box3().setFromObject(root);
+    }
+
+    function effectiveVFovRad(cam){
+      const v = THREE.MathUtils.degToRad(cam.fov || 45);
+      const z = cam.zoom || 1;
+      return 2 * Math.atan( Math.tan(v/2) / z );
+    }
+
+    function slideCameraToFit(cam, bounds, padding=1.35){
+      const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+      const w = Math.max(1, container.clientWidth), h=Math.max(1, container.clientHeight);
+      const aspect = w / h;
+
+      const parent = cam.parent || scene;
+      parent.updateWorldMatrix?.(true, false);
+
+      if (cam.isPerspectiveCamera){
+        const vEff = effectiveVFovRad(cam);
+        const hEff = 2 * Math.atan( Math.tan(vEff/2) * aspect );
+        const fitFov = Math.min(vEff, hEff);
+        const dist = (sphere.radius / Math.sin(fitFov/2)) * padding;
+
+        const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
+        const newWorldPos = sphere.center.clone().sub(dir.multiplyScalar(dist));
+        cam.position.copy(parent.worldToLocal(newWorldPos));
+
+        const nearCand = Math.min(dist/100, Math.max(0.01, dist - sphere.radius*0.99));
+        cam.near = Math.max(0.01, nearCand);
+        cam.far  = Math.max(50,  dist + sphere.radius*4);
+
+        cam.aspect = aspect;
+        cam.updateProjectionMatrix();
+
+        controls.target.copy(sphere.center);
+        controls.minDistance = dist*0.1;
+        controls.maxDistance = dist*10;
+        controls.update();
+      } else {
+        const zoom = cam.zoom || 1;
+        const fitHeight = sphere.radius * 2 * padding * zoom;
+        const fitWidth  = fitHeight * aspect;
+
+        const cx = (camera.left + camera.right) / 2;
+        const cy = (camera.top  + camera.bottom) / 2;
+        camera.left=cx-fitWidth/2; camera.right=cx+fitWidth/2; camera.top=cy+fitHeight/2; camera.bottom=cy-fitHeight/2;
+        orthoBaseHeight = fitHeight;
+
+        const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
+        const back = sphere.radius * 3;
+        const newWorldPos = sphere.center.clone().sub(dir.multiplyScalar(back));
+        cam.position.copy(parent.worldToLocal(newWorldPos));
+
+        controls.target.copy(sphere.center);
+        cam.updateProjectionMatrix(); controls.update();
+      }
+    }
+
+    function applyCameraShift(cam, bounds, fracRight=0.25, fracUp=0.25){
+      const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+      const right = new THREE.Vector3(), up = new THREE.Vector3(), z = new THREE.Vector3();
+      cam.updateMatrixWorld(true);
+      cam.matrixWorld.extractBasis(right, up, z);
+      right.normalize(); up.normalize();
+
+      const shiftWorld = new THREE.Vector3()
+        .addScaledVector(right,  fracRight * sphere.radius)
+        .addScaledVector(up,     fracUp    * sphere.radius);
+
+      const parent = cam.parent || scene;
+      parent.updateWorldMatrix(true, false);
+
+      const camWorld = new THREE.Vector3(); cam.getWorldPosition(camWorld);
+      const newWorld = camWorld.clone().add(shiftWorld);
+      cam.position.copy(parent.worldToLocal(newWorld));
+
+      const center = sphere.center;
+      cam.lookAt(center);
+      controls.target.copy(center);
+      controls.update();
+
+      slideCameraToFit(cam, bounds, 1.35);
+    }
+
+    function pickPreferredCamera(root, preferredName){
+      const cams=[]; root.traverse(o=>{ if(o.isCamera) cams.push(o); });
+      if(!cams.length) return null;
+      if(preferredName){
+        const exact = cams.find(c => (c.name||'').toLowerCase() === preferredName.toLowerCase());
+        if (exact) return exact;
+        const partial = cams.find(c => (c.name||'').toLowerCase().includes(preferredName.toLowerCase()));
+        if (partial) return partial;
+      }
+      return cams[0];
+    }
+
+    function snapshotCamera(){
+      return {
+        position:camera.position.clone(),
+        quaternion:camera.quaternion.clone(),
+        near:camera.near,
+        far:camera.far,
+        fov:camera.isPerspectiveCamera?camera.fov:null,
+        zoom:camera.zoom,
+        target:controls.target.clone(),
+        obj:camera
+      };
+    }
+    function restoreCameraSnapshot(s){
+      camera = s.obj || camera; controls.object = camera;
+      camera.position.copy(s.position); camera.quaternion.copy(s.quaternion);
+      if(camera.isPerspectiveCamera && s.fov!=null) camera.fov=s.fov;
+      camera.zoom = s.zoom ?? camera.zoom;
+      camera.near=s.near; camera.far=s.far; camera.updateProjectionMatrix();
+      controls.target.copy(s.target); controls.update();
+    }
+
+    const BODY_INCLUDE = /(body|paint|carpaint|exterior|shell|car_body|carbody)/i;
+    const BODY_EXCLUDE = /(glass|window|light|headlight|taillight|mirror|tire|wheel|rim|chrome|interior|brake|caliper|badge|logo|grill|grille|license)/i;
+
+    function addMaterialsToSet(set, mat){
+      (Array.isArray(mat)?mat:[mat]).forEach(m=> m && set.add(m));
+    }
+
+    function collectTopLevelMaterials(root){
+      const set=new Set();
+      if(!root || !root.children) return [];
+      root.children.forEach(child=>{
+        if(child.isMesh) addMaterialsToSet(set, child.material);
+      });
+      return Array.from(set);
+    }
+
+    function collectMaterialGroupsByParent(root){
+      const groups = new Map();
+      if(!root) return [];
+
+      const findTop = (obj) => {
+        let n = obj;
+        while(n.parent && n.parent !== root) n = n.parent;
+        return n.parent === root ? n : null;
+      };
+
+      root.traverse(o=>{
+        if(!o.isMesh) return;
+        const top = findTop(o);
+        if(!top) return;
+        const key = top.uuid;
+        if(!groups.has(key)){
+          groups.set(key, { name: top.name || '(unnamed part)', materials:new Set(), meshes:new Set() });
+        }
+        const g = groups.get(key);
+        addMaterialsToSet(g.materials, o.material);
+        g.meshes.add(o);
+      });
+
+      return Array.from(groups.values()).map(g=>({
+        name: g.name,
+        materials: Array.from(g.materials),
+        meshes: Array.from(g.meshes)
+      }));
+    }
+
+    function collectMaterials(root){
+      const set=new Set();
+      root.traverse(o=>{
+        if(o.isMesh){
+          addMaterialsToSet(set, o.material);
+        }
+      });
+      return Array.from(set);
+    }
+
+    function collectBrakeMaterials(root){
+      const set=new Set();
+      const isBrake = (name='') => /brakedisk|brake_disk|brake\s*disk|brakedisc|brake_disc/i.test(name);
+      root.traverse(o=>{
+        if(!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(m=>{
+          if(m && isBrake(m.name||'') || isBrake(o.name||'')) addMaterialsToSet(set, m);
+        });
+      });
+      return Array.from(set);
+    }
+
+    function collectWheelMaterials(root){
+      const set=new Set();
+      const isWheelMat = (name='') =>
+        /(wheel|rimblack|rim|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel)/i.test(name);
+      root.traverse(o=>{
+        if(!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const objName = o.name || '';
+        mats.forEach(m=>{
+          if(!m) return;
+          if(isWheelMat(m.name||'') || isWheelMat(objName)) addMaterialsToSet(set, m);
+        });
+      });
+      return Array.from(set);
+    }
+
+    function pickPaintMaterials(materials){
+      const chosen=[];
+      materials.forEach(m=>{
+        const n=(m.name||'').toLowerCase();
+        if(BODY_INCLUDE.test(n) && !BODY_EXCLUDE.test(n)) chosen.push(m);
+      });
+      if(!chosen.length && currentRoot){
+        let top=null,area=0;
+        currentRoot.traverse(o=>{
+          if(o.isMesh && o.geometry){
+            const p=o.geometry.attributes.position; if(!p) return;
+            let A=0; const a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3();
+            for(let i=0;i<p.count;i+=3){
+              a.fromBufferAttribute(p,i);
+              b.fromBufferAttribute(p,i+1);
+              c.fromBufferAttribute(p,i+2);
+              A += b.clone().sub(a).cross(c.clone().sub(a)).length()*0.5;
+            }
+            if(A>area){ area=A; top=o; }
+          }
+        });
+        if(top){
+          (Array.isArray(top.material)?top.material:[top.material]).forEach(m=>m && chosen.push(m));
+        }
+      }
+      return chosen;
+    }
+
+    function getFinishFactor(){
+      return finishEl ? +finishEl.value : 0.85;
+    }
+
+    function updateTailLightTint(color){
+      if(!tailLightMaterials.length) return;
+      const base = color instanceof THREE.Color ? color : new THREE.Color(color);
+      const emissive = base.clone().multiplyScalar(0.35);
+      tailLightMaterials.forEach(m=>{
+        if('color' in m) m.color.copy(base);
+        if('emissive' in m) m.emissive.copy(emissive);
+        m.needsUpdate = true;
+      });
+    }
+
+    function applyPaintColor(hex){
+      if(!paintMaterials.size && !tailLightMaterials.length) return;
+      const col=new THREE.Color(hex);
+      const envI=+envStrengthEl.value;
+      const f = getFinishFactor();
+
+      const rough = THREE.MathUtils.lerp(0.55, 0.08, f);
+      const clearcoat = THREE.MathUtils.lerp(0.0, 0.9, f);
+      const clearcoatRough = THREE.MathUtils.lerp(0.4, 0.06, f);
+      const metalness = THREE.MathUtils.lerp(0.0, 0.3, f);
+
+      paintMaterials.forEach(m=>{
+        if('color' in m) m.color.set(col);
+        if('metalness' in m) m.metalness = metalness;
+        if('roughness' in m) m.roughness = rough;
+        if('clearcoat' in m){
+          m.clearcoat = clearcoat;
+          m.clearcoatRoughness = clearcoatRough;
+        }
+        if('envMapIntensity' in m) m.envMapIntensity = envI;
+        m.needsUpdate = true;
+      });
+      updateTailLightTint(col);
+    }
+
+    // Wheel variant toggling
+    function normalizeWheelName(name=''){
+      return name.toLowerCase().replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+    }
+    function wheelKey(name=''){
+      return name.toLowerCase().replace(/[^a-z0-9]/g,'');
+    }
+
+    function collectWheelVariants(root){
+      const TARGET_VARIANTS = [
+        { label:'BBS', match:/bbs\s*wheel/i, explicit:['wheel.005','wheel.006','wheel.007','wheel.008','wheel005','wheel006','wheel007','wheel008'] },
+        { label:'Standard', match:/(standart|standard)\s*wheel/i, explicit:['wheel','wheel.009','wheel.010','wheel.011','wheel009','wheel010','wheel011'] },
+        { label:'Volk', match:/volk\s*wheel/i, explicit:['wheel.001','wheel.002','wheel.003','wheel.004','wheel001','wheel002','wheel003','wheel004'] }
+      ];
+
+      const allNodesSet = new Set();
+      const wheelNameNodes = [];
+
+      const variants = [];
+
+      TARGET_VARIANTS.forEach(t=>{
+        const variant = { label:t.label, name:null, node:null, nodes:new Set(), childNames:[], explicit:t.explicit||[] };
+        const explicitKeys = new Set((t.explicit||[]).map(wheelKey));
+
+        const addNodeWithChildren = (node)=>{
+          if(!node) return;
+          variant.nodes.add(node);
+          node.traverse(c=> variant.nodes.add(c));
+        };
+
+        // Find a named group
+        root.traverse(o=>{
+          if(variant.node) return;
+          if(t.match.test(o.name||'')) variant.node = o;
+        });
+
+        // Collect explicit wheel nodes
+        root.traverse(o=>{
+          const nmKey = wheelKey(o.name||'');
+          if(explicitKeys.has(nmKey)){
+            addNodeWithChildren(o);
+            variant.childNames.push(o.name);
+          }
+        });
+
+        // If a group exists, include its subtree
+        if(variant.node){
+          addNodeWithChildren(variant.node);
+          const wheelNames=[];
+          variant.node.traverse(c=>{ if(/wheel/i.test(c.name||'')) wheelNames.push(c.name); });
+          if(!variant.childNames.length) variant.childNames = wheelNames;
+        }
+
+        if(variant.node || variant.nodes.size){
+          variant.name = variant.node?.name || variant.label;
+          variant.nodes.forEach(n=> allNodesSet.add(n));
+          variant.nodes = Array.from(variant.nodes);
+          variants.push(variant);
+        }
+      });
+
+      root.traverse(o=>{ if(/wheel/i.test(o.name||'')) wheelNameNodes.push(o); });
+      allWheelNodes = Array.from(new Set([...allNodesSet, ...wheelNameNodes]));
+      console.log('Wheel variants:', variants.map(v=>`${v.label}: ${v.childNames.join(', ')}`));
+      console.log('Wheel name matches:', wheelNameNodes.map(n=>n.name));
+      console.log('All wheel-related nodes:', allWheelNodes.map(n=>n.name));
+      return variants;
+    }
+
+    function logWheelObjects(root){
+      const items=[];
+      root.traverse(o=>{
+        const n=o.name||'';
+        if(/wheel/i.test(n)){
+          const path=[]; let p=o; while(p){ path.unshift(p.name||p.type); p=p.parent; }
+          items.push({ name:n, visible:o.visible, type:o.type, path:path.join('/') });
+        }
+      });
+      console.log('All objects containing "Wheel":', items);
+    }
+
+    function logWheelHierarchy(root){
+      const entries=[];
+      root.traverse(o=>{
+        const n=o.name||'';
+        if(/wheel/i.test(n)){
+          const children=[];
+          o.children?.forEach(c=> children.push(c.name||c.type));
+          entries.push({ name:n, children, type:o.type, visible:o.visible });
+        }
+      });
+      console.log('Wheel nodes with direct children:', entries);
+    }
+
+    function logBrakeDisks(root){
+      const items=[];
+      root.traverse(o=>{
+        const n=o.name||'';
+        if(/brakedisk/i.test(n)){
+          const path=[]; let p=o; while(p){ path.unshift(p.name||p.type); p=p.parent; }
+          items.push({ name:n, visible:o.visible, type:o.type, path:path.join('/') });
+        }
+      });
+      console.log('All objects containing "Brakedisk":', items);
+    }
+
+    function styleBrakeDisks(root){
+      root.traverse(o=>{
+        if(!o.isMesh) return;
+        const n = (o.name||'').toLowerCase();
+        if(!/brakedisk/i.test(n)) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(m=>{
+          if(!m) return;
+          if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+          if('side' in m) m.side = THREE.DoubleSide;
+          if('metalness' in m) m.metalness = Math.min(0.9, m.metalness ?? 0.7);
+          if('roughness' in m) m.roughness = Math.max(0.15, Math.min(0.6, m.roughness ?? 0.35));
+          if('envMapIntensity' in m) m.envMapIntensity = 0.8;
+          m.needsUpdate = true;
+        });
+      });
+    }
+
+    function styleWheelsAndCalipers(root){
+      root.traverse(o=>{
+        if(!o.isMesh) return;
+        const n = (o.name||'').toLowerCase();
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+
+        const matNames = mats.map(m=>(m?.name||'').toLowerCase());
+        const nameLower = n.toLowerCase();
+        const isCaliper = /caliper/.test(nameLower) || matNames.some(mn=>/caliper/.test(mn));
+        const isDisk = /(brakedisk|brake[_\s]?disk|brakedisc|brake[_\s]?disc)/i.test(o.name||'') ||
+                       matNames.some(mn=> /(brakedisk|brake[_\s]?disk|brakedisc|brake[_\s]?disc)/i.test(mn));
+        const isWheelFinish = !isCaliper && !isDisk && (
+          /(rimblack|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel|wheel\.?ft|wheel_ft|wheelft|rim)/i.test(o.name||'') ||
+          matNames.some(mn=>/(rimblack|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel|wheel\.?ft|wheel_ft|wheelft|rim)/i.test(mn))
+        );
+
+        // Glossy black wheels/rims
+        if(isWheelFinish){
+          mats.forEach(m=>{
+            if(!m) return;
+            if('color' in m) m.color.set('#050505');
+            if('metalness' in m) m.metalness = 1.0;
+            if('roughness' in m) m.roughness = 0.03;
+            if('clearcoat' in m){ m.clearcoat = 1.0; m.clearcoatRoughness = 0.02; }
+            if('envMapIntensity' in m) m.envMapIntensity = 1.5;
+            if('side' in m) m.side = THREE.FrontSide;
+            m.needsUpdate = true;
+          });
+        }
+
+        // Red calipers
+        if(isCaliper){
+          mats.forEach(m=>{
+            if(!m) return;
+            if('color' in m) m.color.set('#c00012');
+            if('emissive' in m) m.emissive.set('#300000');
+            if('emissiveIntensity' in m) m.emissiveIntensity = 0.6;
+            if('metalness' in m) m.metalness = 0.4;
+            if('roughness' in m) m.roughness = 0.25;
+            if('envMapIntensity' in m) m.envMapIntensity = 0.7;
+            if('side' in m) m.side = THREE.FrontSide;
+            m.needsUpdate = true;
+          });
+        }
+
+        // Metallic grey disks
+        if(isDisk){
+          mats.forEach(m=>{
+            if(!m) return;
+            if('color' in m) m.color.set('#bfc3c8');
+            if('metalness' in m) m.metalness = 1.0;
+            if('roughness' in m) m.roughness = 0.14;
+            if('envMapIntensity' in m) m.envMapIntensity = 1.2;
+            if('side' in m) m.side = THREE.DoubleSide;
+            if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+            m.needsUpdate = true;
+          });
+        }
+      });
+    }
+
+    function populateWheelSelect(variants){
+      wheelSelect.innerHTML = '<option value="">Auto (from GLB)</option>';
+      variants.forEach(v=>{
+        const opt = document.createElement('option');
+        opt.value = v.label;
+        const detail = v.childNames?.length ? ` (${v.childNames.join(', ')})` : '';
+        opt.textContent = `${v.label}${detail}`;
+        wheelSelect.appendChild(opt);
+      });
+      console.log('Wheel variants populated:', variants.map(v=>`${v.label}: ${v.childNames.join(', ')}`));
+      wheelSelect.disabled = false;
+      if(variants.length){
+        wheelSelect.value = variants[0].label;
+      } else {
+        wheelSelect.value = '';
+      }
+    }
+
+    function applyWheelVariant(name){
+      if(!wheelVariants.length){
+        wheelSelect.value = '';
+        wheelSelect.disabled = false;
+        return;
+      }
+      wheelSelect.disabled = false;
+      const normalized = normalizeWheelName(name);
+      const targetLabel = normalized ? normalized : normalizeWheelName(wheelVariants[0].label);
+      const targetVariant = wheelVariants.find(v=> normalizeWheelName(v.label) === targetLabel) || wheelVariants[0];
+      const allowedKeys = new Set((targetVariant.explicit||[]).map(wheelKey));
+
+      const shown = [];
+      allWheelNodes.forEach(node=>{
+        const key = wheelKey(node.name||'');
+        let match = allowedKeys.has(key);
+        // allow match by ancestor name
+        if(!match){
+          let p=node.parent;
+          while(p){
+            const pk = wheelKey(p.name||'');
+            if(allowedKeys.has(pk)){ match=true; break; }
+            p=p.parent;
+          }
+        }
+        if(match){
+          const stack=[node];
+          while(stack.length){
+            const cur=stack.pop();
+            if(!cur) continue;
+            cur.visible = true;
+            shown.push({ name: cur.name||'', parent: cur.parent?.name||'', type: cur.type, children:(cur.children||[]).map(c=>c.name||c.type) });
+            (cur.children||[]).forEach(c=> stack.push(c));
+          }
+        } else {
+          node.visible = false;
+        }
+      });
+
+      if(!normalized){
+        wheelSelect.value = targetVariant?.label ?? '';
+      }
+      console.log('Wheel variant applied:', wheelSelect.value || '(auto)');
+      console.log('Nodes shown for variant:', shown);
+    }
+
+    function setEnvIntensitySmart(val){
+      scene.traverse(o=>{
+        if(!o.isMesh) return;
+        const mats=Array.isArray(o.material)?o.material:[o.material];
+        mats.forEach(m=>{
+          if(!m) return;
+          const n=((m.name||'')+' '+(o.name||'')).toLowerCase();
+          if('envMapIntensity' in m){
+            if(paintMaterials.has(m)) m.envMapIntensity = val;
+            else if (/(glass|window|windshield|mirror)/i.test(n)) m.envMapIntensity = Math.min(0.6*val, 0.4);
+            else m.envMapIntensity = Math.min(0.35*val, 0.3);
+          }
+          m.needsUpdate = true;
+        });
+      });
+    }
+
+    function dumpSceneObjects(root){
+      const out=[];
+      const stack=[{node:root, path:root.name||'(root)'}];
+      while(stack.length){
+        const {node, path}=stack.pop();
+        if(!node) continue;
+        out.push({
+          name: node.name||'',
+          normalized: normalizeWheelName(node.name||''),
+          type: node.type,
+          visible: node.visible,
+          path
+        });
+        (node.children||[]).forEach(child=>{
+          stack.push({ node: child, path: `${path}/${child.name||child.type}` });
+        });
+      }
+      console.log('Model object list (name/normalized/type/visible/path):', out);
+      return out;
+    }
+
+    function disposeMaterial(mat){
+      (Array.isArray(mat)?mat:[mat]).forEach(m=>{
+        if(!m) return;
+        for(const k in m){
+          const v=m[k];
+          if(v && v.isTexture) v.dispose();
+        }
+        m.dispose?.();
+      });
+    }
+
+    // ---------- Non-paint styling ----------
+    function styleNonPaint(root){
+      const bounds = getRenderableBounds(root);
+      const size   = new THREE.Vector3();
+      bounds.getSize(size);
+
+      const width  = size.x;
+      const height = size.y;
+      const length = size.z;
+
+      const rearZThreshold = bounds.max.z - length * 0.28;
+      const midLowY  = bounds.min.y + height * 0.20;
+      const midHighY = bounds.min.y + height * 0.85;
+      const sideThreshold = width * 0.12;
+
+      const isGlass = (name) =>
+        /(glass|window|windscreen|windshield|sideglass|rearwindow|rear_window)/i.test(name);
+
+      const isWheel = (name) =>
+        /(wheel|rim|tyre|tire|alloy|wheel_front|wheel_back)/i.test(name);
+
+      const isBrightTrim = (name) =>
+        /(chrome|trim|exhaust|muffler|tip|badge|emblem|pony|logo|diffuser|insert)/i.test(name);
+
+      const isTailLensMaterial = (name) =>
+        /red\s*glass/i.test(name) ||
+        /high\s*light.*glass|glass.*high\s*light/i.test(name) ||
+        /taillight|tail_light|taillamp|tail_lamp|rear_lamp|rearlight|rear_light|backlight|back_light/i.test(name) ||
+        /(tail|rear|back).*(light|lamp)/i.test(name) ||
+        /(light|lamp).*(tail|rear|back)/i.test(name) ||
+        /(stoplamp|stop_lamp|stoplight|brakelight|brake_light)/i.test(name);
+
+      const isRearBlackPanel = (name) =>
+        /(rear_panel|tailpanel|decklid|garnish|applique|rear_trunk_panel|rear_grille|rear_panel_black)/i.test(name);
+
+      const tmpBox   = new THREE.Box3();
+      const tmpCenter= new THREE.Vector3();
+
+      root.traverse((o)=>{
+        if(!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+
+        tmpBox.setFromObject(o);
+        tmpBox.getCenter(tmpCenter);
+
+        const centerX = tmpCenter.x;
+        const centerY = tmpCenter.y;
+        const centerZ = tmpCenter.z;
+
+        const nearRear = centerZ > rearZThreshold;
+        const midBand  = centerY > midLowY && centerY < midHighY;
+        const sidePos  = Math.abs(centerX - (bounds.min.x + width * 0.5)) > sideThreshold;
+
+        const geoLooksTail = nearRear && midBand && sidePos;
+
+        mats.forEach((m)=>{
+          if(!m) return;
+          const tag = `${(m.name||'').toLowerCase()} ${(o.name||'').toLowerCase()}`;
+          const matNameLower = (m.name || '').toLowerCase();
+          const objNameLower = (o.name || '').toLowerCase();
+
+          // 1) LED strips inside headlight ??" "Light"
+          if (matNameLower === 'light') {
+            if ('color' in m) m.color.set('#fdfdfd');
+            if ('emissive' in m) m.emissive.set('#ffffff');
+            if ('emissiveIntensity' in m) m.emissiveIntensity = 3.0;
+            if ('metalness' in m)  m.metalness  = 0.0;
+            if ('roughness' in m)  m.roughness  = 0.12;
+            if ('envMapIntensity' in m) m.envMapIntensity = 1.0;
+            if ('transparent' in m) { m.transparent = false; m.opacity = 1.0; }
+            m.side = THREE.FrontSide;
+            m.needsUpdate = true;
+            return;
+          }
+
+          // 2) Gloss black headlight housing ??" "Ford_Mustang_GT_Plastic_Matt"
+          if (matNameLower === 'ford_mustang_gt_plastic_matt') {
+            if ('color' in m) m.color.set('#050509');
+            if ('metalness' in m)  m.metalness  = 0.6;
+            if ('roughness' in m)  m.roughness  = 0.15;
+            if ('clearcoat' in m) {
+              m.clearcoat = 0.9;
+              m.clearcoatRoughness = 0.05;
+            }
+            if ('envMapIntensity' in m) m.envMapIntensity = 1.2;
+            m.side = THREE.FrontSide;
+            m.needsUpdate = true;
+            return;
+          }
+
+          // 3) Orange reflector in headlight ??" "Orange glass"
+          if (matNameLower === 'orange glass') {
+            if ('color' in m) m.color.set('#ff7a1a');              // bright orange
+            if ('emissive' in m) m.emissive.set('#ff7a1a');        // subtle glow
+            if ('emissiveIntensity' in m) m.emissiveIntensity = 0.7;
+
+            if ('transparent' in m) {
+              m.transparent = true;
+              m.opacity = 0.65;
+            }
+
+            if ('metalness' in m)  m.metalness  = 0.0;
+            if ('roughness' in m)  m.roughness  = 0.12;
+
+            if ('clearcoat' in m) {
+              m.clearcoat = 0.85;
+              m.clearcoatRoughness = 0.05;
+            }
+
+            if ('transmission' in m) {
+              m.transmission = 0.7;
+              m.ior = 1.5;
+              m.thickness = 0.4;
+            }
+
+            if ('envMapIntensity' in m) m.envMapIntensity = 1.0;
+
+            m.side = THREE.FrontSide;
+            m.needsUpdate = true;
+            return;
+          }
+
+          // --- Taillights: RED GLASS materials only ---
+          {
+            const isTailRedGlass =
+              /red\s*glass/.test(matNameLower) || /red\s*glass/.test(objNameLower);
+
+            if (isTailRedGlass) {
+              if ("color" in m) m.color.set("#b00010");
+              if ("emissive" in m) m.emissive.set("#330000");
+              if ("emissiveIntensity" in m) m.emissiveIntensity = 0.8;
+
+              if ("transparent" in m) {
+                m.transparent = true;
+                m.opacity = 0.45;
+              }
+
+              if ("metalness" in m)  m.metalness  = 0.0;
+              if ("roughness" in m)  m.roughness  = 0.05;
+
+              if ("clearcoat" in m) {
+                m.clearcoat          = 0.9;
+                m.clearcoatRoughness = 0.03;
+              }
+
+              if ("transmission" in m) {
+                m.transmission = 0.9;
+                m.ior          = 1.5;
+                m.thickness    = 0.4;
+              }
+
+              if ("envMapIntensity" in m) m.envMapIntensity = 1.1;
+
+              m.side = THREE.FrontSide;
+              m.needsUpdate = true;
+              return;
+            }
+          }
+
+          // Rear black panel
+          if (isRearBlackPanel(tag)) {
+            if ('color' in m) m.color.set('#111111');
+            if ('metalness' in m) m.metalness = 0.1;
+            if ('roughness' in m) m.roughness = 0.3;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.35;
+            m.needsUpdate = true;
+            return;
+          }
+
+          // Glass / windows
+          if (isGlass(tag)) {
+            if ('color' in m) m.color.set('#cfd8ff');
+            if ('metalness' in m) m.metalness = 0.0;
+            if ('roughness' in m) m.roughness = 0.1;
+            if ('transparent' in m) {
+              m.transparent = true;
+              m.opacity = 0.35;
+            }
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.7;
+            m.side = THREE.FrontSide;
+            m.needsUpdate = true;
+            return;
+          }
+
+          // Wheels
+          if (isWheel(tag)) {
+            if ('color' in m) m.color.set('#d5d7dd');
+            if ('metalness' in m) m.metalness = 0.8;
+            if ('roughness' in m) m.roughness = 0.25;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.9;
+            m.needsUpdate = true;
+            return;
+          }
+
+          // Bright trim / exhaust / badging
+          if (isBrightTrim(tag)) {
+            if ('color' in m) m.color.set('#f4f5f7');
+            if ('metalness' in m) m.metalness = 1.0;
+            if ('roughness' in m) m.roughness = 0.15;
+            if ('envMapIntensity' in m) m.envMapIntensity = 1.0;
+            m.needsUpdate = true;
+          }
+        });
+      });
+    }
+
+    // Tail light tuning: make rear lamps read as lit red by default for the known tail part.
+    function enhanceTailLights(root){
+      tailLightMaterials = [];
+      const groups = collectMaterialGroupsByParent(root);
+      const targets = groups.filter(g =>
+        /part[_\s-]*0*23/i.test(g.name) ||
+        /part[_\s-]*0*24/i.test(g.name) ||
+        /(tail|rear).*light/i.test(g.name)
+      );
+      if(!targets.length) return;
+
+      const makeLensMaterial = () => {
+        const base = new THREE.Color(colorInput.value || DEFAULT_SWATCH);
+        return new THREE.MeshPhysicalMaterial({
+          color: base,
+          emissive: base.clone().multiplyScalar(0.35),
+          emissiveIntensity: 9.0,
+          metalness: 0.0,
+          roughness: 0.03,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.025,
+          transmission: 0.08,
+          ior: 1.45,
+          thickness: 0.25,
+          transparent: true,
+          opacity: 0.98,
+          envMapIntensity: 1.0,
+          depthWrite: false,
+          side: THREE.FrontSide
+        });
+      };
+
+      const createTracked = () => {
+        const m = makeLensMaterial();
+        tailLightMaterials.push(m);
+        return m;
+      };
+
+      targets.forEach(target=>{
+        target.meshes.forEach(mesh=>{
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          mats.forEach(m => m?.dispose?.());
+          mesh.material = Array.isArray(mesh.material) ? mats.map(()=>createTracked()) : createTracked();
+        });
+      });
+    }
+
+    async function loadModel(url, { displayName=null, preferGlbCamera=true } = {}){
+      camera = defaultCamera;
+      controls.object = camera;
+      startSnapshot=null;
+
+      if(currentRoot){
+        scene.remove(currentRoot);
+        currentRoot.traverse(o=>{
+          if(o.geometry) o.geometry.dispose();
+          if(o.material) disposeMaterial(o.material);
+        });
+        currentRoot=null;
+        paintMaterials.clear();
+        wheelVariants = [];
+        allWheelNodes = [];
+        tailLightMaterials = [];
+        chipsEl.innerHTML='';
+      }
+
+      try{
+        const gltf = await gltfLoader.loadAsync(url);
+        currentRoot = gltf.scene;
+        scene.add(currentRoot);
+        modelNameEl.textContent = displayName || (typeof url==='string'
+          ? decodeURIComponent(url.split('/').pop())
+          : 'uploaded.glb');
+
+        await new Promise(requestAnimationFrame);
+
+        const bounds = getRenderableBounds(currentRoot);
+
+        if (preferGlbCamera){
+          const glbCam = pickPreferredCamera(gltf.scene, CAM_NAME);
+          if (glbCam){ camera = glbCam; controls.object = camera; }
+        }
+
+        slideCameraToFit(camera, bounds, 1.35);
+        applyCameraShift(camera, bounds, SHIFT_RIGHT_F, SHIFT_UP_F);
+
+        startSnapshot = snapshotCamera();
+
+        dumpSceneObjects(currentRoot);
+
+        const parentGroups = collectMaterialGroupsByParent(currentRoot);
+        const topLevelMats = collectTopLevelMaterials(currentRoot);
+        const mats = topLevelMats.length ? topLevelMats : collectMaterials(currentRoot);
+        const paintCandidates = pickPaintMaterials(mats);
+        paintCandidates.forEach(m => paintMaterials.add(m));
+
+        wheelVariants = collectWheelVariants(currentRoot);
+        logWheelObjects(currentRoot);
+        logWheelHierarchy(currentRoot);
+        logBrakeDisks(currentRoot);
+        styleBrakeDisks(currentRoot);
+        styleWheelsAndCalipers(currentRoot);
+        populateWheelSelect(wheelVariants);
+
+        const brakeMats = collectBrakeMaterials(currentRoot);
+        if(brakeMats.length){
+          brakeMats.forEach(m=>{
+            const chip=document.createElement('button');
+            chip.className='chip';
+            chip.textContent=m.name || 'BrakeDisk';
+            chip.setAttribute('aria-pressed', paintMaterials.has(m)?'true':'false');
+            chip.addEventListener('click', ()=>{
+              const on = chip.getAttribute('aria-pressed')!=='true';
+              chip.setAttribute('aria-pressed', on?'true':'false');
+              if(on) paintMaterials.add(m); else paintMaterials.delete(m);
+              applyPaintColor(colorInput.value);
+            });
+            chipsEl.appendChild(chip);
+          });
+        }
+
+        const wheelMats = collectWheelMaterials(currentRoot);
+        if(wheelMats.length){
+          // keep wheels separate from body paint by default
+          wheelMats.forEach(m=> paintMaterials.delete(m));
+          wheelMats.forEach(m=>{
+            const chip=document.createElement('button');
+            chip.className='chip';
+            chip.textContent=m.name || 'Wheel';
+            chip.setAttribute('aria-pressed', paintMaterials.has(m)?'true':'false');
+            chip.addEventListener('click', ()=>{
+              const on = chip.getAttribute('aria-pressed')!=='true';
+              chip.setAttribute('aria-pressed', on?'true':'false');
+              if(on) paintMaterials.add(m); else paintMaterials.delete(m);
+              applyPaintColor(colorInput.value);
+            });
+            chipsEl.appendChild(chip);
+          });
+        }
+
+        if(parentGroups.length){
+          parentGroups.forEach(group=>{
+            const chip=document.createElement('button');
+            chip.className='chip';
+            chip.textContent=group.name;
+            const isOn = group.materials.some(m=>paintMaterials.has(m));
+            chip.setAttribute('aria-pressed', isOn ? 'true':'false');
+            chip.addEventListener('click', ()=>{
+              const on = chip.getAttribute('aria-pressed')!=='true';
+              chip.setAttribute('aria-pressed', on?'true':'false');
+              group.materials.forEach(m=>{
+                if(on) paintMaterials.add(m); else paintMaterials.delete(m);
+              });
+              applyPaintColor(colorInput.value);
+            });
+            chipsEl.appendChild(chip);
+          });
+        } else {
+          mats.forEach(m=>{
+            const chip=document.createElement('button');
+            chip.className='chip';
+            chip.textContent=m.name||'(unnamed)';
+            chip.setAttribute('aria-pressed', paintMaterials.has(m)?'true':'false');
+            chip.addEventListener('click', ()=>{
+              const on = chip.getAttribute('aria-pressed')!=='true';
+              chip.setAttribute('aria-pressed', on?'true':'false');
+              if(on) paintMaterials.add(m); else paintMaterials.delete(m);
+              applyPaintColor(colorInput.value);
+            });
+            chipsEl.appendChild(chip);
+          });
+        }
+
+        styleNonPaint(currentRoot);
+        enhanceTailLights(currentRoot);
+        applyWheelVariant(wheelSelect?.value || '');
+        colorInput.value = getStartColor();
+        applyPaintColor(colorInput.value);
+        setEnvIntensitySmart(+envStrengthEl.value);
+
+      }catch(err){
+        console.error(err);
+        overlay.classList.add('visible');
+        overlayText.innerHTML = `<div style="color:#d92d20">Failed to load model.</div><div class="muted">Check CORS/path; drag &amp; drop a .glb instead.</div>`;
+      }
+    }
+
+    renderer.setAnimationLoop(()=>{
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    (async function boot(){
+      colorInput.value = getStartColor();
+      autoRotateEl.checked = controls.autoRotate;
+      rotateSpeedEl.value = controls.autoRotateSpeed;
+      exposureEl.value = renderer.toneMappingExposure.toFixed(2);
+      envStrengthEl.value = '0.35';
+
+      if (START_MODEL) await loadModel(START_MODEL, { preferGlbCamera:true });
+      else modelNameEl.textContent = 'Drag a .glb to the viewer or click ??oLoad GLB???.';
+    })();
+
+    function getStartColor(){
+      const c=new URLSearchParams(location.search).get('c');
+      return c?`#${c}`:DEFAULT_SWATCH;
+    }
+  </script>
+
+  <div class="muted" style="position:fixed;left:16px;bottom:12px;opacity:.6">
+    Ford and Mustang are trademarks of Ford Motor Company. This demo is for illustrative purposes.
+  </div>
+</body>
+</html>
+
+
