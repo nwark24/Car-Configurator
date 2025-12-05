@@ -264,8 +264,10 @@
     let currentRoot = null;
     let paintMaterials = new Set();
     let wheelVariants = [];
+    let wheelNameNodesList = [];
     let allWheelNodes = [];
     let tailLightMaterials = [];
+    let brakeMaterials = new Set();
     let startSnapshot = null;
 
     const PALETTE = [
@@ -542,7 +544,7 @@
 
     function collectBrakeMaterials(root){
       const set=new Set();
-      const isBrake = (name='') => /brakedisk|brake_disk|brake\s*disk|brakedisc|brake_disc/i.test(name);
+      const isBrake = (name='') => /brakedisk|brake_disk|brake\s*disk|brakedisc|brake_disc|brake\s*disck|coroded|brake/i.test(name);
       root.traverse(o=>{
         if(!o.isMesh) return;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -551,6 +553,39 @@
         });
       });
       return Array.from(set);
+    }
+
+    function computeBrakeEnvIntensity(val){
+      const v = Number.isFinite(val) ? val : +envStrengthEl?.value || 0;
+      return THREE.MathUtils.clamp(0.7 + v * 0.8, 0.7, 1.5);
+    }
+
+    function applyCaliperFinish(m, envVal = computeBrakeEnvIntensity(+envStrengthEl?.value || 0)){
+      if(!m) return;
+      if('color' in m) m.color.set('#c00012');
+      if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+      if('side' in m) m.side = THREE.DoubleSide;
+      if('metalness' in m) m.metalness = 0.45;
+      if('roughness' in m) m.roughness = 0.23;
+      if('clearcoat' in m){ m.clearcoat = 0.35; m.clearcoatRoughness = 0.12; }
+      if('envMapIntensity' in m) m.envMapIntensity = envVal;
+      if('emissive' in m) m.emissive.set('#300000');
+      if('emissiveIntensity' in m) m.emissiveIntensity = 0.6;
+      m.needsUpdate = true;
+    }
+
+    function applyDiskFinish(m, envVal = computeBrakeEnvIntensity(+envStrengthEl?.value || 0)){
+      if(!m) return;
+      if('color' in m) m.color.set('#f1f2f6');
+      if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+      if('side' in m) m.side = THREE.DoubleSide;
+      if('metalness' in m) m.metalness = 1.0;
+      if('roughness' in m) m.roughness = 0.06;
+      if('clearcoat' in m){ m.clearcoat = 0.9; m.clearcoatRoughness = 0.02; }
+      if('envMapIntensity' in m) m.envMapIntensity = envVal * 1.2;
+      if('emissive' in m) m.emissive.set('#6f757c');
+      if('emissiveIntensity' in m) m.emissiveIntensity = 0.3;
+      m.needsUpdate = true;
     }
 
     function collectWheelMaterials(root){
@@ -624,6 +659,7 @@
       const metalness = THREE.MathUtils.lerp(0.0, 0.3, f);
 
       paintMaterials.forEach(m=>{
+        if(brakeMaterials.has(m)) return; // keep brake disks independent
         if('color' in m) m.color.set(col);
         if('metalness' in m) m.metalness = metalness;
         if('roughness' in m) m.roughness = rough;
@@ -635,6 +671,7 @@
         m.needsUpdate = true;
       });
       updateTailLightTint(col);
+      restyleBrakeMaterials();
     }
 
     // Wheel variant toggling
@@ -700,6 +737,7 @@
 
       root.traverse(o=>{ if(/wheel/i.test(o.name||'')) wheelNameNodes.push(o); });
       allWheelNodes = Array.from(new Set([...allNodesSet, ...wheelNameNodes]));
+      wheelNameNodesList = wheelNameNodes;
       console.log('Wheel variants:', variants.map(v=>`${v.label}: ${v.childNames.join(', ')}`));
       console.log('Wheel name matches:', wheelNameNodes.map(n=>n.name));
       console.log('All wheel-related nodes:', allWheelNodes.map(n=>n.name));
@@ -744,24 +782,25 @@
     }
 
     function styleBrakeDisks(root){
+      const brakeEnv = computeBrakeEnvIntensity(+envStrengthEl.value || 0);
       root.traverse(o=>{
         if(!o.isMesh) return;
         const n = (o.name||'').toLowerCase();
-        if(!/brakedisk/i.test(n)) return;
+        if(!/brakedisk|brake_disk|brake\s*disk|brakedisc|brake_disc|brake\s*disck|coroded/i.test(n)) return;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach(m=>{
-          if(!m) return;
-          if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
-          if('side' in m) m.side = THREE.DoubleSide;
-          if('metalness' in m) m.metalness = Math.min(0.9, m.metalness ?? 0.7);
-          if('roughness' in m) m.roughness = Math.max(0.15, Math.min(0.6, m.roughness ?? 0.35));
-          if('envMapIntensity' in m) m.envMapIntensity = 0.8;
-          m.needsUpdate = true;
-        });
+        mats.forEach(m=> applyDiskFinish(m, brakeEnv));
+      });
+    }
+
+    function restyleBrakeMaterials(){
+      const brakeEnv = computeBrakeEnvIntensity(+envStrengthEl.value || 0);
+      brakeMaterials.forEach(m=>{
+        applyDiskFinish(m, brakeEnv);
       });
     }
 
     function styleWheelsAndCalipers(root){
+      const brakeEnv = computeBrakeEnvIntensity(+envStrengthEl.value || 0);
       root.traverse(o=>{
         if(!o.isMesh) return;
         const n = (o.name||'').toLowerCase();
@@ -786,38 +825,20 @@
             if('roughness' in m) m.roughness = 0.03;
             if('clearcoat' in m){ m.clearcoat = 1.0; m.clearcoatRoughness = 0.02; }
             if('envMapIntensity' in m) m.envMapIntensity = 1.5;
-            if('side' in m) m.side = THREE.FrontSide;
+            if('side' in m) m.side = THREE.DoubleSide;
+            if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
             m.needsUpdate = true;
           });
         }
 
         // Red calipers
         if(isCaliper){
-          mats.forEach(m=>{
-            if(!m) return;
-            if('color' in m) m.color.set('#c00012');
-            if('emissive' in m) m.emissive.set('#300000');
-            if('emissiveIntensity' in m) m.emissiveIntensity = 0.6;
-            if('metalness' in m) m.metalness = 0.4;
-            if('roughness' in m) m.roughness = 0.25;
-            if('envMapIntensity' in m) m.envMapIntensity = 0.7;
-            if('side' in m) m.side = THREE.FrontSide;
-            m.needsUpdate = true;
-          });
+          mats.forEach(m=> applyCaliperFinish(m, brakeEnv));
         }
 
         // Metallic grey disks
         if(isDisk){
-          mats.forEach(m=>{
-            if(!m) return;
-            if('color' in m) m.color.set('#bfc3c8');
-            if('metalness' in m) m.metalness = 1.0;
-            if('roughness' in m) m.roughness = 0.14;
-            if('envMapIntensity' in m) m.envMapIntensity = 1.2;
-            if('side' in m) m.side = THREE.DoubleSide;
-            if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
-            m.needsUpdate = true;
-          });
+          mats.forEach(m=> applyDiskFinish(m, brakeEnv));
         }
       });
     }
@@ -849,44 +870,72 @@
       wheelSelect.disabled = false;
       const normalized = normalizeWheelName(name);
       const targetLabel = normalized ? normalized : normalizeWheelName(wheelVariants[0].label);
-      const targetVariant = wheelVariants.find(v=> normalizeWheelName(v.label) === targetLabel) || wheelVariants[0];
-      const allowedKeys = new Set((targetVariant.explicit||[]).map(wheelKey));
-
       const shown = [];
-      allWheelNodes.forEach(node=>{
-        const key = wheelKey(node.name||'');
-        let match = allowedKeys.has(key);
-        // allow match by ancestor name
-        if(!match){
-          let p=node.parent;
-          while(p){
-            const pk = wheelKey(p.name||'');
-            if(allowedKeys.has(pk)){ match=true; break; }
-            p=p.parent;
-          }
+
+      const isBbs = (nm) => /bbs/.test(nm) || /wheel\.?0?0[5-8]\b/.test(nm) || /wheel005|wheel006|wheel007|wheel008/.test(nm);
+      const isVolk = (nm) => /volk/.test(nm) || /wheel\.?0?0[1-4]\b/.test(nm) || /wheel001|wheel002|wheel003|wheel004/.test(nm);
+      const isStd  = (nm) => /standart|standard/.test(nm) || /wheel\.?0?0(9|10|11)\b/.test(nm) || nm === 'wheel';
+
+      const showNode = (node) => {
+        if(!node) return;
+        const stack=[node];
+        while(stack.length){
+          const cur=stack.pop(); if(!cur) continue;
+          cur.visible = true;
+          const mats = Array.isArray(cur.material) ? cur.material : [cur.material];
+          mats.forEach(m=>{
+            if(!m) return;
+            if('side' in m) m.side = THREE.DoubleSide;
+            if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+            m.needsUpdate = true;
+          });
+          shown.push({ name: cur.name||'', parent: cur.parent?.name||'', type: cur.type, children:(cur.children||[]).map(c=>c.name||c.type) });
+          (cur.children||[]).forEach(c=> stack.push(c));
         }
-        if(match){
-          const stack=[node];
-          while(stack.length){
-            const cur=stack.pop();
-            if(!cur) continue;
-            cur.visible = true;
-            shown.push({ name: cur.name||'', parent: cur.parent?.name||'', type: cur.type, children:(cur.children||[]).map(c=>c.name||c.type) });
-            (cur.children||[]).forEach(c=> stack.push(c));
-          }
+        let p=node.parent;
+        while(p){ p.visible=true; p=p.parent; }
+      };
+
+      // hide all wheel-name nodes first
+      (wheelNameNodesList||[]).forEach(n=>{
+        const stack=[n];
+        while(stack.length){
+          const cur=stack.pop(); if(!cur) continue;
+          cur.visible = false;
+          (cur.children||[]).forEach(c=> stack.push(c));
+        }
+      });
+
+      // decide per node
+      (wheelNameNodesList||[]).forEach(n=>{
+        const nm = (n.name||'').toLowerCase();
+        const pm = (n.parent?.name||'').toLowerCase();
+        const bbs = isBbs(nm) || isBbs(pm);
+        const volk = isVolk(nm) || isVolk(pm);
+        const std = isStd(nm) || isStd(pm);
+
+        if(targetLabel === 'bbs'){
+          if(!bbs){ n.visible = false; return; }
+          showNode(n);
+        } else if(targetLabel === 'volk'){
+          if(!volk){ n.visible = false; return; }
+          showNode(n);
         } else {
-          node.visible = false;
+          if(!std){ n.visible = false; return; }
+          showNode(n);
         }
       });
 
       if(!normalized){
-        wheelSelect.value = targetVariant?.label ?? '';
+        const first = wheelVariants.find(v=>v.nodes?.length);
+        if(first) wheelSelect.value = first.label;
       }
       console.log('Wheel variant applied:', wheelSelect.value || '(auto)');
       console.log('Nodes shown for variant:', shown);
     }
 
     function setEnvIntensitySmart(val){
+      const brakeEnv = computeBrakeEnvIntensity(val);
       scene.traverse(o=>{
         if(!o.isMesh) return;
         const mats=Array.isArray(o.material)?o.material:[o.material];
@@ -894,7 +943,8 @@
           if(!m) return;
           const n=((m.name||'')+' '+(o.name||'')).toLowerCase();
           if('envMapIntensity' in m){
-            if(paintMaterials.has(m)) m.envMapIntensity = val;
+            if(brakeMaterials.has(m)) m.envMapIntensity = brakeEnv;
+            else if(paintMaterials.has(m)) m.envMapIntensity = val;
             else if (/(glass|window|windshield|mirror)/i.test(n)) m.envMapIntensity = Math.min(0.6*val, 0.4);
             else m.envMapIntensity = Math.min(0.35*val, 0.3);
           }
@@ -1204,6 +1254,7 @@
         wheelVariants = [];
         allWheelNodes = [];
         tailLightMaterials = [];
+        brakeMaterials.clear();
         chipsEl.innerHTML='';
       }
 
@@ -1246,8 +1297,10 @@
         populateWheelSelect(wheelVariants);
 
         const brakeMats = collectBrakeMaterials(currentRoot);
+        brakeMaterials = new Set(brakeMats);
         if(brakeMats.length){
           brakeMats.forEach(m=>{
+            paintMaterials.delete(m); // keep off paint by default
             const chip=document.createElement('button');
             chip.className='chip';
             chip.textContent=m.name || 'BrakeDisk';
