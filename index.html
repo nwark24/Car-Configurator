@@ -268,6 +268,10 @@
     let allWheelNodes = [];
     let tailLightMaterials = [];
     let brakeMaterials = new Set();
+    let tireMaterials = new Set();
+    let tireMaterialTypes = new Map(); // material -> variant key
+    let rimMaterials = new Map(); // material -> rim type
+    let currentWheelVariantLabel = '';
     let startSnapshot = null;
 
     const PALETTE = [
@@ -588,17 +592,18 @@
       m.needsUpdate = true;
     }
 
+    const isWheelishName = (name='') =>
+      /(wheel|whelll|rimblack|rim|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel|wheel\.?ft|wheel_ft|wheelft)/i.test(name);
+
     function collectWheelMaterials(root){
       const set=new Set();
-      const isWheelMat = (name='') =>
-        /(wheel|rimblack|rim|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel)/i.test(name);
       root.traverse(o=>{
         if(!o.isMesh) return;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         const objName = o.name || '';
         mats.forEach(m=>{
           if(!m) return;
-          if(isWheelMat(m.name||'') || isWheelMat(objName)) addMaterialsToSet(set, m);
+          if(isWheelishName(m.name||'') || isWheelishName(objName)) addMaterialsToSet(set, m);
         });
       });
       return Array.from(set);
@@ -608,6 +613,7 @@
       const chosen=[];
       materials.forEach(m=>{
         const n=(m.name||'').toLowerCase();
+        if(isWheelishName(n)) return; // keep wheels/rims out of paint set
         if(BODY_INCLUDE.test(n) && !BODY_EXCLUDE.test(n)) chosen.push(m);
       });
       if(!chosen.length && currentRoot){
@@ -682,6 +688,13 @@
       return name.toLowerCase().replace(/[^a-z0-9]/g,'');
     }
 
+    const getGroupNames = (node) => {
+      const ext = node?.userData?.gltfExtensions?.S8S_v3d_node || node?.userData?.S8S_v3d_node;
+      if(!ext) return [];
+      const g = ext.groupNames;
+      return Array.isArray(g) ? g : [];
+    };
+
     function collectWheelVariants(root){
       const TARGET_VARIANTS = [
         { label:'BBS', match:/bbs\s*wheel/i, explicit:['wheel.005','wheel.006','wheel.007','wheel.008','wheel005','wheel006','wheel007','wheel008'] },
@@ -704,10 +717,12 @@
           node.traverse(c=> variant.nodes.add(c));
         };
 
-        // Find a named group
+        // Find a named group (name or group tag)
         root.traverse(o=>{
           if(variant.node) return;
-          if(t.match.test(o.name||'')) variant.node = o;
+          const nm = o.name || '';
+          const groupStr = getGroupNames(o).join(' ');
+          if(t.match.test(nm) || t.match.test(groupStr)) variant.node = o;
         });
 
         // Collect explicit wheel nodes
@@ -735,13 +750,28 @@
         }
       });
 
-      root.traverse(o=>{ if(/wheel/i.test(o.name||'')) wheelNameNodes.push(o); });
+      root.traverse(o=>{
+        const nm = o.name || '';
+        const groupStr = getGroupNames(o).join(' ');
+        if(/wheel/i.test(nm) || /wheel/i.test(groupStr)) wheelNameNodes.push(o);
+      });
       allWheelNodes = Array.from(new Set([...allNodesSet, ...wheelNameNodes]));
       wheelNameNodesList = wheelNameNodes;
       console.log('Wheel variants:', variants.map(v=>`${v.label}: ${v.childNames.join(', ')}`));
       console.log('Wheel name matches:', wheelNameNodes.map(n=>n.name));
       console.log('All wheel-related nodes:', allWheelNodes.map(n=>n.name));
       return variants;
+    }
+
+    function ancestorNameOrGroupMatches(node, regex){
+      let p=node;
+      while(p){
+        const nm = p.name || '';
+        const groupStr = getGroupNames(p).join(' ');
+        if(regex.test(nm) || regex.test(groupStr)) return true;
+        p = p.parent;
+      }
+      return false;
     }
 
     function logWheelObjects(root){
@@ -799,8 +829,92 @@
       });
     }
 
+    function isTireMaterial(m){
+      if(!m) return false;
+      const nm = (m.name||'').toLowerCase();
+      const texNames = [];
+      ['map','normalMap','metalnessMap','roughnessMap','bumpMap','emissiveMap'].forEach(k=>{
+        const t = m[k]; if(t && t.name) texNames.push(t.name.toLowerCase());
+      });
+      const blob = [nm, ...texNames].join(' ');
+      return /(tire|tyre|rubber|pilot|pzero|pirelli|michelin|sport4s|sport_4s|sport-4s)/i.test(blob);
+    }
+
+    function rimEnvIntensity(type, val){
+      switch(type){
+        case 'volk': return Math.min(1.2 + 0.8 * val, 2.2);
+        case 'bbs': return Math.min(0.9 + 0.8 * val, 1.9);
+        case 'standard': return Math.min(1.0 + 0.6 * val, 1.8);
+        default: return Math.min(1.0 + 0.6 * val, 1.6);
+      }
+    }
+
+    function setRimFinish(m, type, envVal){
+      if(!m) return;
+      rimMaterials.set(m, type);
+      if('color' in m){
+        if(type === 'volk') m.color.set('#0c0c0c'); // black Volk rim
+        else if(type === 'bbs') m.color.set('#d8dbdf');
+        else if(type === 'standard') m.color.set('#b5bac2');
+        else m.color.set('#32363f');
+      }
+      if('metalness' in m){
+        if(type === 'volk') m.metalness = 1.0;
+        else if(type === 'bbs') m.metalness = 0.6;
+        else if(type === 'standard') m.metalness = 0.55;
+        else m.metalness = 0.8;
+      }
+      if('roughness' in m){
+        if(type === 'volk') m.roughness = 0.18;
+        else if(type === 'bbs') m.roughness = 0.12;
+        else if(type === 'standard') m.roughness = 0.16;
+        else m.roughness = 0.20;
+      }
+      if('clearcoat' in m){
+        if(type === 'volk'){ m.clearcoat = 0.4; m.clearcoatRoughness = 0.06; }
+        else if(type === 'bbs'){ m.clearcoat = 0.12; m.clearcoatRoughness = 0.05; }
+        else if(type === 'standard'){ m.clearcoat = 0.2; m.clearcoatRoughness = 0.05; }
+        else { m.clearcoat = 0.35; m.clearcoatRoughness = 0.08; }
+      }
+      if('envMapIntensity' in m) m.envMapIntensity = rimEnvIntensity(type, envVal);
+      if('side' in m) m.side = THREE.DoubleSide;
+      if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+      m.needsUpdate = true;
+    }
+
+    function applyTireFinish(m, envVal, type='default'){
+      if(!m) return;
+      const isVolk = type === 'volk';
+      const baseCol = isVolk ? '#2c2c2c' : '#2c2c2c'; // consistent grey tire
+      if('color' in m) m.color.set(baseCol);
+      if('emissive' in m) m.emissive.set('#000000');
+      if('metalness' in m) m.metalness = 0.0;
+      if('roughness' in m) m.roughness = isVolk ? 0.9 : 0.9;
+      if('clearcoat' in m){ m.clearcoat = 0.0; m.clearcoatRoughness = 0.0; }
+      if('specularIntensity' in m) m.specularIntensity = 0.1;
+      if('envMapIntensity' in m) m.envMapIntensity = Math.min(0.10 + 0.16 * envVal, 0.26);
+      if('side' in m) m.side = THREE.DoubleSide;
+      if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
+      m.needsUpdate = true;
+    }
+
+    function restyleTires(envVal){
+      tireMaterials.forEach(m=> applyTireFinish(m, envVal, tireMaterialTypes.get(m) || 'default'));
+    }
+    function restyleRims(envVal){
+      rimMaterials.forEach((type, mat)=> setRimFinish(mat, type, envVal));
+    }
+
+    function removeFromPaint(mats){
+      (Array.isArray(mats)?mats:[mats]).forEach(mat=>{
+        if(mat) paintMaterials.delete(mat);
+      });
+    }
+
     function styleWheelsAndCalipers(root){
-      const brakeEnv = computeBrakeEnvIntensity(+envStrengthEl.value || 0);
+      const envVal = +envStrengthEl.value || 0;
+      const brakeEnv = computeBrakeEnvIntensity(envVal);
+      const tireEnv  = Math.min(0.10 + 0.16 * envVal, 0.26);
       root.traverse(o=>{
         if(!o.isMesh) return;
         const n = (o.name||'').toLowerCase();
@@ -808,26 +922,40 @@
 
         const matNames = mats.map(m=>(m?.name||'').toLowerCase());
         const nameLower = n.toLowerCase();
+        const inWheelCluster = ancestorNameOrGroupMatches(o, /(wheel\.?0?0[1-4]\b|volk\s*wheel|bbs\s*wheel|standart\s*wheel|standard\s*wheel)/i);
+        const isRimNode = /(whelll)/i.test(nameLower) || ancestorNameOrGroupMatches(o, /(whelll)/i);
+        const matIsTire = mats.some(isTireMaterial);
         const isCaliper = /caliper/.test(nameLower) || matNames.some(mn=>/caliper/.test(mn));
         const isDisk = /(brakedisk|brake[_\s]?disk|brakedisc|brake[_\s]?disc)/i.test(o.name||'') ||
                        matNames.some(mn=> /(brakedisk|brake[_\s]?disk|brakedisc|brake[_\s]?disc)/i.test(mn));
-        const isWheelFinish = !isCaliper && !isDisk && (
+        const isWheelFinish = !isCaliper && !isDisk && !matIsTire && (isRimNode || (
           /(rimblack|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel|wheel\.?ft|wheel_ft|wheelft|rim)/i.test(o.name||'') ||
           matNames.some(mn=>/(rimblack|clean[_\s]*al[_\s]*wheel|al[_\s]*brass[_\s]*wheel|wheel\.?ft|wheel_ft|wheelft|rim)/i.test(mn))
+        ));
+        const isTire = !isCaliper && !isDisk && !isWheelFinish && (
+          /(tire|tyre|rubber|pilot[_\s]?sport|michelin|pirelli|pzero)/i.test(o.name||'') ||
+          matNames.some(mn=> /(tire|tyre|rubber|pilot[_\s]?sport|michelin|pirelli|pzero)/i.test(mn)) ||
+          matIsTire
         );
 
         // Glossy black wheels/rims
         if(isWheelFinish){
+          const rimType = normalizeWheelName(currentWheelVariantLabel || wheelSelect?.value || '');
+          const rimTypeKey = rimType.includes('volk') ? 'volk' : rimType.includes('bbs') ? 'bbs' : rimType.includes('standard') ? 'standard' : 'default';
+          mats.forEach(m=>{
+            removeFromPaint(m);
+            setRimFinish(m, rimTypeKey, envVal);
+          });
+        }
+
+        // Tires: deep black, rubbery and low reflections
+        if(isTire){
           mats.forEach(m=>{
             if(!m) return;
-            if('color' in m) m.color.set('#050505');
-            if('metalness' in m) m.metalness = 1.0;
-            if('roughness' in m) m.roughness = 0.03;
-            if('clearcoat' in m){ m.clearcoat = 1.0; m.clearcoatRoughness = 0.02; }
-            if('envMapIntensity' in m) m.envMapIntensity = 1.5;
-            if('side' in m) m.side = THREE.DoubleSide;
-            if('transparent' in m){ m.transparent = false; m.opacity = 1.0; m.depthWrite = true; }
-            m.needsUpdate = true;
+            addMaterialsToSet(tireMaterials, m);
+            tireMaterialTypes.set(m, normalizeWheelName(currentWheelVariantLabel || wheelSelect?.value || '') || 'default');
+            removeFromPaint(m);
+            applyTireFinish(m, envVal, normalizeWheelName(currentWheelVariantLabel || wheelSelect?.value || '') || 'default');
           });
         }
 
@@ -861,7 +989,49 @@
       }
     }
 
-    function applyWheelVariant(name){
+    
+    // ---- Volk wheels: parent -> child color override ----
+    function applyVolkParentChildColors(root){
+      if(!root) return;
+
+      const PARENTS = ['wheel.001','wheel.002','wheel.003','wheel.004'];
+      const CHILDS  = ['whelll','whelll.001','whelll.002','whelll.003'];
+
+      const parentCol = new THREE.Color('#9a9a9a'); // grey
+      const childCol  = new THREE.Color('#ffffff'); // white
+
+      const paintNodeMeshes = (node, col, opts={})=>{
+        if(!node) return;
+        node.traverse(o=>{
+          if(!o.isMesh) return;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach(m=>{
+            if(!m || !('color' in m)) return;
+            m.color.copy(col);
+            if('metalness' in m && opts.metalness != null) m.metalness = opts.metalness;
+            if('roughness' in m && opts.roughness != null) m.roughness = opts.roughness;
+            if('clearcoat' in m && opts.clearcoat != null) m.clearcoat = opts.clearcoat;
+            if('clearcoatRoughness' in m && opts.clearcoatRoughness != null) m.clearcoatRoughness = opts.clearcoatRoughness;
+            if('envMapIntensity' in m && opts.envMapIntensity != null) m.envMapIntensity = opts.envMapIntensity;
+            m.needsUpdate = true;
+          });
+        });
+      };
+
+      // 1) Parents first
+      PARENTS.forEach(n=>{
+        const node = root.getObjectByName(n);
+        paintNodeMeshes(node, parentCol, { metalness: 0.85, roughness: 0.25, clearcoat: 0.2, clearcoatRoughness: 0.08, envMapIntensity: rimEnvIntensity('volk', +envStrengthEl.value || 0) });
+      });
+
+      // 2) Children second (override)
+      CHILDS.forEach(n=>{
+        const node = root.getObjectByName(n);
+        paintNodeMeshes(node, childCol, { metalness: 0.9, roughness: 0.15, clearcoat: 0.35, clearcoatRoughness: 0.06, envMapIntensity: rimEnvIntensity('volk', +envStrengthEl.value || 0) });
+      });
+    }
+
+function applyWheelVariant(name){
       if(!wheelVariants.length){
         wheelSelect.value = '';
         wheelSelect.disabled = false;
@@ -896,41 +1066,71 @@
         while(p){ p.visible=true; p=p.parent; }
       };
 
-      // hide all wheel-name nodes first
-      (wheelNameNodesList||[]).forEach(n=>{
-        const stack=[n];
+      const hideNode = (node) => {
+        if(!node) return;
+        const stack=[node];
         while(stack.length){
           const cur=stack.pop(); if(!cur) continue;
           cur.visible = false;
           (cur.children||[]).forEach(c=> stack.push(c));
         }
+      };
+
+      const selectedVariant = wheelVariants.find(v=> normalizeWheelName(v.label) === targetLabel) || wheelVariants[0];
+      const variantNodes = (selectedVariant?.nodes || []).filter(Boolean);
+      const hideList = (allWheelNodes && allWheelNodes.length) ? allWheelNodes : (wheelNameNodesList || []);
+      const canUseVariantNodes = hideList.length && variantNodes.length;
+
+      // Always start by hiding everything we consider "wheel related"
+      const hiddenSet = new Set();
+      hideList.forEach(n=>{
+        if(!n || hiddenSet.has(n)) return;
+        hiddenSet.add(n);
+        hideNode(n);
       });
 
-      // decide per node
-      (wheelNameNodesList||[]).forEach(n=>{
-        const nm = (n.name||'').toLowerCase();
-        const pm = (n.parent?.name||'').toLowerCase();
-        const bbs = isBbs(nm) || isBbs(pm);
-        const volk = isVolk(nm) || isVolk(pm);
-        const std = isStd(nm) || isStd(pm);
+      if(canUseVariantNodes){
+        const shownSet = new Set();
+        variantNodes.forEach(n=>{
+          if(!n || shownSet.has(n)) return;
+          shownSet.add(n);
+          showNode(n);
+        });
+      } else {
+        // Fallback to name-based detection if we failed to collect nodes
+        (wheelNameNodesList||[]).forEach(n=>{
+          const nm = (n.name||'').toLowerCase();
+          const pm = (n.parent?.name||'').toLowerCase();
+          const bbs = isBbs(nm) || isBbs(pm);
+          const volk = isVolk(nm) || isVolk(pm);
+          const std = isStd(nm) || isStd(pm);
 
-        if(targetLabel === 'bbs'){
-          if(!bbs){ n.visible = false; return; }
-          showNode(n);
-        } else if(targetLabel === 'volk'){
-          if(!volk){ n.visible = false; return; }
-          showNode(n);
-        } else {
-          if(!std){ n.visible = false; return; }
-          showNode(n);
-        }
-      });
-
-      if(!normalized){
-        const first = wheelVariants.find(v=>v.nodes?.length);
-        if(first) wheelSelect.value = first.label;
+          if(targetLabel === 'bbs'){
+            if(!bbs){ n.visible = false; return; }
+            showNode(n);
+          } else if(targetLabel === 'volk'){
+            if(!volk){ n.visible = false; return; }
+            showNode(n);
+          } else {
+            if(!std){ n.visible = false; return; }
+            showNode(n);
+          }
+        });
       }
-      console.log('Wheel variant applied:', wheelSelect.value || '(auto)');
+
+      if(!normalized && wheelVariants[0]){
+        wheelSelect.value = wheelVariants[0].label;
+      } else if(normalized && selectedVariant){
+        wheelSelect.value = selectedVariant.label;
+      }
+      currentWheelVariantLabel = wheelSelect.value || '';
+      restyleTires(+envStrengthEl.value || 0);
+      restyleRims(+envStrengthEl.value || 0);
+            // Volk specific: enforce parent grey -> child white override AFTER rim/tire restyle
+      if((wheelSelect.value||'').toLowerCase() === 'volk'){
+        applyVolkParentChildColors(currentRoot);
+      }
+console.log('Wheel variant applied:', wheelSelect.value || '(auto)');
       console.log('Nodes shown for variant:', shown);
     }
 
@@ -944,6 +1144,8 @@
           const n=((m.name||'')+' '+(o.name||'')).toLowerCase();
           if('envMapIntensity' in m){
             if(brakeMaterials.has(m)) m.envMapIntensity = brakeEnv;
+            else if(tireMaterials.has(m) || isTireMaterial(m)) m.envMapIntensity = Math.min(0.10 + 0.16*val, 0.26);
+            else if(rimMaterials.has(m)) m.envMapIntensity = rimEnvIntensity(rimMaterials.get(m), val);
             else if(paintMaterials.has(m)) m.envMapIntensity = val;
             else if (/(glass|window|windshield|mirror)/i.test(n)) m.envMapIntensity = Math.min(0.6*val, 0.4);
             else m.envMapIntensity = Math.min(0.35*val, 0.3);
@@ -951,6 +1153,8 @@
           m.needsUpdate = true;
         });
       });
+      restyleTires(val);
+      restyleRims(val);
     }
 
     function dumpSceneObjects(root){
@@ -1255,6 +1459,8 @@
         allWheelNodes = [];
         tailLightMaterials = [];
         brakeMaterials.clear();
+        tireMaterials = new Set();
+        rimMaterials = new Map();
         chipsEl.innerHTML='';
       }
 
@@ -1294,6 +1500,8 @@
         logBrakeDisks(currentRoot);
         styleBrakeDisks(currentRoot);
         styleWheelsAndCalipers(currentRoot);
+        restyleTires(+envStrengthEl.value || 0);
+        restyleRims(+envStrengthEl.value || 0);
         populateWheelSelect(wheelVariants);
 
         const brakeMats = collectBrakeMaterials(currentRoot);
@@ -1319,19 +1527,7 @@
         if(wheelMats.length){
           // keep wheels separate from body paint by default
           wheelMats.forEach(m=> paintMaterials.delete(m));
-          wheelMats.forEach(m=>{
-            const chip=document.createElement('button');
-            chip.className='chip';
-            chip.textContent=m.name || 'Wheel';
-            chip.setAttribute('aria-pressed', paintMaterials.has(m)?'true':'false');
-            chip.addEventListener('click', ()=>{
-              const on = chip.getAttribute('aria-pressed')!=='true';
-              chip.setAttribute('aria-pressed', on?'true':'false');
-              if(on) paintMaterials.add(m); else paintMaterials.delete(m);
-              applyPaintColor(colorInput.value);
-            });
-            chipsEl.appendChild(chip);
-          });
+          // Do NOT expose wheel/tire chips so parent/child stay styled, not painted
         }
 
         if(parentGroups.length){
