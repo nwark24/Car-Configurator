@@ -676,7 +676,8 @@
         if('envMapIntensity' in m) m.envMapIntensity = envI;
         m.needsUpdate = true;
       });
-      updateTailLightTint(col);
+            forceLockedBlack();
+updateTailLightTint(col);
       restyleBrakeMaterials();
     }
 
@@ -911,6 +912,41 @@
       });
     }
 
+    // --- LOCK specific parts to black (exclude from paint) ---
+    const LOCKED_BLACK_PART_NAMES = new Set(['FORD_EXTERIOR_PART010']);
+    function forceLockedBlack(){
+      if(!currentRoot) return;
+      const envVal = +envStrengthEl?.value || 0;
+      const envI = Math.min(0.35, 0.10 + 0.25 * envVal);
+
+      LOCKED_BLACK_PART_NAMES.forEach((partName)=>{
+        const node = currentRoot.getObjectByName(partName);
+        if(!node) return;
+
+        node.traverse((o)=>{
+          if(!o.isMesh) return;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach((m)=>{
+            if(!m) return;
+            // ensure it's never painted by body color
+            paintMaterials.delete(m);
+
+            if('color' in m) m.color.set('#000000');
+            if('metalness' in m) m.metalness = 0.10;   // plastic-ish black
+            if('roughness' in m) m.roughness = 0.65;
+            if('clearcoat' in m){
+              m.clearcoat = 0.0;
+              m.clearcoatRoughness = 0.0;
+            }
+            if('envMapIntensity' in m) m.envMapIntensity = envI;
+
+            m.needsUpdate = true;
+          });
+        });
+      });
+    }
+
+
     function styleWheelsAndCalipers(root){
       const envVal = +envStrengthEl.value || 0;
       const brakeEnv = computeBrakeEnvIntensity(envVal);
@@ -989,7 +1025,7 @@
       }
     }
 
-    
+
     // ---- Volk wheels: parent -> child color override ----
     function applyVolkParentChildColors(root){
       if(!root) return;
@@ -1565,6 +1601,8 @@ console.log('Wheel variant applied:', wheelSelect.value || '(auto)');
 
         styleNonPaint(currentRoot);
         enhanceTailLights(currentRoot);
+        forceLockedBlack();
+
         applyWheelVariant(wheelSelect?.value || '');
         colorInput.value = getStartColor();
         applyPaintColor(colorInput.value);
@@ -1604,5 +1642,3 @@ console.log('Wheel variant applied:', wheelSelect.value || '(auto)');
   </div>
 </body>
 </html>
-
-
